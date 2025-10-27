@@ -31,7 +31,13 @@ class MarketData():
         
         self.overlapped_assets = {}
         self.base_mappings = {exc: {} for exc in exchanges}
-        
+    
+    def get_base_mappings(self, exchange):
+        return self.base_mappings[exchange]
+    
+    def get_l2_stream(self, exchange, ticker):
+        return self.l2_ticker_streams[exchange][ticker]
+    
     async def search_overlap_asset(self, gateway, exchanges):   
         assets = {}
         
@@ -62,7 +68,6 @@ class MarketData():
             try:
                 perps_data = await gateway.exchange.contract_specifications(exc=exchange)
                 funding_data = await gateway.exchange.get_funding_info(exc=exchange)
-                pprint(perps_data)
                 mappings = collections.defaultdict(list)
                 assets = self.overlapped_assets
                 
@@ -149,6 +154,7 @@ async def main():
     )
     
     asyncio.create_task(market_data.serve_exchanges())
+
     await asyncio.sleep(30*90)
     await gateway.cleanup_clients()
     
