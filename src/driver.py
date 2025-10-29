@@ -7,17 +7,26 @@ import pytz
 from pprint import pprint
 import logging
 import time
+import numpy as np
+
+trade_fees = {
+    'binance': [0.0002, 0.0005], # maker, taker
+    'hyperliquid': [0.00015, 0.00045]
+}
 
 exchanges =['binance', 'hyperliquid']
 
+fr_annualised = {}
+
 round_hr = lambda dt: (dt + timedelta(minutes=30)).replace(second=0, microsecond=0, minute=0)
+interval_per_year = lambda hours: ((24/ hours) *365)
 
 async def calculate_cross_arbitrage(gateway, exchanges, asset):
     contracts_on_asset = {
         exchange: (len(market_data.get_base_mappings(exchange)[asset]) if asset in market_data.get_base_mappings(exchange) else 0)
         for exchange in exchanges
     }
-    positions = {exc: pos for exc, pos in zip(exchanges, positions)}
+    skip = set()
     
     while True:
         contracts = []
@@ -28,7 +37,7 @@ async def calculate_cross_arbitrage(gateway, exchanges, asset):
             
             for contract in mapped:
                 lob = market_data.get_l2_stream(exchange, contract['symbol'])
-                l2_last = {'ts': lob.timestamps, 'b': lob.bids, 'a': lob.asks}
+                l2_last = {'ts': lob.timestamp, 'b': lob.bids, 'a': lob.asks}
 
                 fx = 1
                 l2_ts = l2_last['ts']
@@ -52,9 +61,11 @@ async def calculate_cross_arbitrage(gateway, exchanges, asset):
                     elapsed_ms = min(elapsed_ms, _interval_ms)
                     accrual = mark *fr * (elapsed_ms/_interval_ms if _interval_ms else 0)
                 else:
-                    accrual = mark *fr * (_interval_ms - max(0, nx_ts, fr_ts))/ _interval_ms if _interval_ms else 0
+                    accrual = mark *fr * (_interval_ms - max(0, nx_ts - fr_ts))/ _interval_ms if _interval_ms else 0
 
                 accrualX = accrual * fx
+                fr_annualised = fr * interval_per_year(frint) *100
+                
                 contracts.append({
                     'symbol': contract['symbol'],
                     'l2_ts': l2_ts,
@@ -62,6 +73,7 @@ async def calculate_cross_arbitrage(gateway, exchanges, asset):
                     'askX': askX,
                     'markX': markX,
                     'accrualX': accrualX,
+                    'fr_annualised': fr_annualised,
                     'exchange': exchange,
                     'lob': lob,
                     'quantity_precision': contract['quantity_precision'],
@@ -78,6 +90,34 @@ async def calculate_cross_arbitrage(gateway, exchanges, asset):
                     continue
                 
                 ij_ticker = (icontract['symbol'], icontract['exchange'], jcontract['symbol'], jcontract['exchange'])
+                ji_ticker = (jcontract['symbol'], jcontract['exchange'], icontract['symbol'], icontract['exchange'])
+                
+                if ij_ticker in skip or ji_ticker in skip:
+                    continue
+                
+                l2_delay = int(time.time()* 1000) - min(icontract['l2_ts'], jcontract['l2_ts'])
+                if l2_delay > 4000:
+                    skip.add(ij_ticker)
+                    skip.add(ji_ticker)
+                    continue
+                
+                ij_basis = jcontract['bidX'] - icontract['askX']
+                ij_basis_adj = ij_basis + (icontract['accrualX'] - jcontract['accrualX'])
+                
+                ji_basis = icontract['bidX'] - jcontract['askX']
+                ji_basis_adj = ji_basis + (jcontract['accrualX'] - icontract['accrualX'])
+                
+                avg_mark = 0.5 * (icontract['markX'] + jcontract['markX'])
+                fees = np.max(
+                    trade_fees[icontract['exchange']][0] + trade_fees[jcontract['exchange']][1],
+                    trade_fees[jcontract['exchange']][0] + trade_fees[icontract['exchange']][1]
+                )
+                inertia = fees * avg_mark
+                ij_ev = (ij_basis_adj - inertia) / avg_mark
+                ji_ev = (ji_basis_adj - inertia) / avg_mark
+            
+            
+                
                
 async def main():
     global gateway, market_data

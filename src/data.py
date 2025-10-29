@@ -31,6 +31,11 @@ class MarketData():
         
         self.overlapped_assets = {}
         self.base_mappings = {exc: {} for exc in exchanges}
+        self.l2_ticker_streams = {exc:{} for exc in exchanges}
+        self.balances = {exc:None for exc in exchanges}
+        
+    def get_balance(self, exchange):
+        return self.balances[exchange]
     
     def get_base_mappings(self, exchange):
         return self.base_mappings[exchange]
@@ -84,7 +89,7 @@ class MarketData():
                     if len(mappings[k]) ==0:
                         remove.add(k)
                 for k in remove:
-                    remove.pop(k)
+                    mappings.pop(k)
                     
                 if exchange == "binance":
                     for k, v in mappings.items():
