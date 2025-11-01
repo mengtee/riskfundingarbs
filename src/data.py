@@ -9,6 +9,8 @@ from quantpylib.gateway.master import Gateway
 
 load_dotenv()
 
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
+
 def get_key():
     config_keys = {
         'binance':{
@@ -52,7 +54,8 @@ class MarketData():
         
         binance_assets = {s[:-4] if s.endswith(('USDC', 'USDT')) else s for s in assets['binance']}
         hyperliquid_assets = set(assets['hyperliquid'].keys())
-        self.overlapped_assets = binance_assets & hyperliquid_assets
+        overlapped = binance_assets & hyperliquid_assets
+        self.overlapped_assets = sorted(list(overlapped))
 
         return self.overlapped_assets 
     
@@ -75,7 +78,7 @@ class MarketData():
                 funding_data = await gateway.exchange.get_funding_info(exc=exchange)
                 mappings = collections.defaultdict(list)
                 assets = self.overlapped_assets
-                
+                            
                 for k, v in perps_data.items():
                     if v['base_asset'] in assets and v['quote_asset'] in ['USDT', "USDC", "USD"]:
                         if 'PERP' in k or not any(x in k for x in ['-C', '-P']):
@@ -103,7 +106,7 @@ class MarketData():
                 await asyncio.sleep(60*4)
                 
             except Exception as e:
-                print(f'Unknown error {e}')
+                logging.error(f'Unknown error {e}')
                 
     async def serve_l2_stream(self, gateway, exchange):
         universe = self.universe
@@ -119,19 +122,24 @@ class MarketData():
                 tickers.extend([ticker['symbol'] for ticker in base_mappings[asset]])
         
         logging.info(f'[{exchange}] L2 Ticker Streams: {tickers}')
+        logging.info(f'[{exchange} Total ticker count: {len(tickers)}]')
         if exchange == 'binance': tickers.append('USDCUSDT')
         
-        lobs = await asyncio.gather(*[
-            gateway.executor.l2_book_mirror(
-                ticker=ticker,
-                speed_ms=500,
-                exc=exchange,
-                depth=20,
-                as_dict=False,
-                buffer_size=10,
-            )for ticker in tickers
-        ])
-        
+        # Use WebSocket streaming instead of REST API polling to avoid rate limits
+        try:
+            lobs = await asyncio.gather(*[
+                gateway.executor.l2_book_mirror(
+                    ticker = ticker,
+                    speed_ms = 35000,
+                    exc=exchange,
+                    depth=20,
+                    as_dict=False,
+                    buffer_size=10
+                )for ticker in tickers
+            ])
+        except Exception as e:
+            logging.error(f'Error in performing executor l2_book_mirror: {e}')
+            
         for ticker, lob in zip(tickers, lobs):
             self.l2_ticker_streams[exchange][ticker] = lob
         logging.info(f'Updated L2 Streams for {exchange} and tickers: {list(self.l2_ticker_streams[exchange].keys())}')
