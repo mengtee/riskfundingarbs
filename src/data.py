@@ -82,10 +82,11 @@ class MarketData():
                 for k, v in perps_data.items():
                     if v['base_asset'] in assets and v['quote_asset'] in ['USDT', "USDC", "USD"]:
                         if 'PERP' in k or not any(x in k for x in ['-C', '-P']):
-                            funding_info = funding_data.get(k, {})  
-                            if funding_info:
-                                combined_data = {**v, **funding_info, 'symbol':k}
-                                mappings[v['base_asset']].append(combined_data)
+                            if not v.get('is_delisted', False):
+                                funding_info = funding_data.get(k, {})  
+                                if funding_info:
+                                    combined_data = {**v, **funding_info, 'symbol':k}
+                                    mappings[v['base_asset']].append(combined_data)
                 remove = set()
                 for k,v in mappings.items():
                     if len(v) > 1 and self.preference_quote is not None:
