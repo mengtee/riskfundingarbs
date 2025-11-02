@@ -82,9 +82,10 @@ class MarketData():
                 for k, v in perps_data.items():
                     if v['base_asset'] in assets and v['quote_asset'] in ['USDT', "USDC", "USD"]:
                         if 'PERP' in k or not any(x in k for x in ['-C', '-P']):
-                            funding_info = funding_data.get(k, {})
-                            combined_data = {**v, **funding_info, 'symbol':k}
-                            mappings[v['base_asset']].append(combined_data)
+                            funding_info = funding_data.get(k, {})  
+                            if funding_info:
+                                combined_data = {**v, **funding_info, 'symbol':k}
+                                mappings[v['base_asset']].append(combined_data)
                 remove = set()
                 for k,v in mappings.items():
                     if len(v) > 1 and self.preference_quote is not None:
@@ -104,6 +105,7 @@ class MarketData():
                 self.base_mappings[exchange] = mappings
                 self.universe[exchange] = mappings
                 await asyncio.sleep(60*4)
+                print(f"This is the base mappings {self.base_mappings[exchange]}")
                 
             except Exception as e:
                 logging.error(f'Unknown error {e}')
@@ -129,21 +131,29 @@ class MarketData():
         try:
             lobs = await asyncio.gather(*[
                 gateway.executor.l2_book_mirror(
-                    ticker = ticker,
-                    speed_ms = 35000,
+                    ticker=ticker,
+                    speed_ms=500,
                     exc=exchange,
                     depth=20,
                     as_dict=False,
                     buffer_size=10
                 )for ticker in tickers
-            ])
+            ], return_exceptions=True)
+            
+            successful_pairs = []
+            for ticker, lob in zip(tickers, lobs):
+                if isinstance(lob, Exception):
+                    logging.warning(f'[{exchange}] Failed to connect {ticker}: {lob}')
+                else:
+                    successful_pairs.append((ticker, lob))
+            
+            for ticker, lob in successful_pairs:
+                self.l2_ticker_streams[exchange][ticker] = lob
+            
+            logging.info(f"Updated L2 Streams for {exchange} and tickers: {list(self.l2_ticker_streams[exchange].keys())}")
         except Exception as e:
             logging.error(f'Error in performing executor l2_book_mirror: {e}')
-            
-        for ticker, lob in zip(tickers, lobs):
-            self.l2_ticker_streams[exchange][ticker] = lob
-        logging.info(f'Updated L2 Streams for {exchange} and tickers: {list(self.l2_ticker_streams[exchange].keys())}')
-        
+                    
         await asyncio.sleep(1e9)
     
     async def serve_balance(self, gateway, exchange, poll_interval=100):
