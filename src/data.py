@@ -55,9 +55,9 @@ class MarketData():
         binance_assets = {s[:-4] if s.endswith(('USDC', 'USDT')) else s for s in assets['binance']}
         hyperliquid_assets = set(assets['hyperliquid'].keys())
         overlapped = binance_assets & hyperliquid_assets
-        self.overlapped_assets = sorted(list(overlapped))
+        self.overlapped_assets = sorted(list(overlapped))[:10]
 
-        return self.overlapped_assets 
+        return self.overlapped_assets
     
     async def serve_exchanges(self):
         return await asyncio.gather(*[
@@ -96,17 +96,11 @@ class MarketData():
                 for k in remove:
                     mappings.pop(k)
                     
-                if exchange == "binance":
-                    for k, v in mappings.items():
-                        for contract in v:
-                            contract['frint'] = np.float64(1)
-                
                 mappings = dict(sorted(mappings.items()))
                 
                 self.base_mappings[exchange] = mappings
                 self.universe[exchange] = mappings
                 await asyncio.sleep(60*4)
-                print(f"This is the base mappings {self.base_mappings[exchange]}")
                 
             except Exception as e:
                 logging.error(f'Unknown error {e}')

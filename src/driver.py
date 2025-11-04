@@ -13,6 +13,7 @@ import logging
 import time
 import numpy as np
 from quant_telegram import TelegramBot
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
 
 trade_fees = {
     'binance': [0.0002, 0.0005], # maker, taker
@@ -34,14 +35,9 @@ async def calculate_cross_arbitrage(timeout, **kwargs):
     except asyncio.TimeoutError:
         logging.warning(f"Trade for {kwargs.get('asset')} timed out after {timeout} seconds")
 
-async def _calculate_cross_arbitrage(gateway, exchanges, asset):
-    contracts_on_asset = {
-        exchange: (len(market_data.get_base_mappings(exchange)[asset]) if asset in market_data.get_base_mappings(exchange) else 0)
-        for exchange in exchanges
-    }
-    
-    evs = {}
+async def _calculate_cross_arbitrage(gateway, exchanges, asset):    
     skip = set()
+    iter = 0
     
     while True:
         contracts = []
@@ -59,17 +55,18 @@ async def _calculate_cross_arbitrage(gateway, exchanges, asset):
                 l2_ts = l2_last['ts']
                 bidX = l2_last['b'][0][0] * fx
                 askX = l2_last['a'][0][0] * fx
-
+ 
                 fr_ts = contract['timestamp']
                 fr = float(contract['funding_rate'])
                 frint = float(contract['funding_interval'])
                 nx_ts = contract['next_funding']
                 mark = float(contract['mark_price'])
+                
+                # print(f"Values: fr={fr}, frint={frint}, mark={mark}, fr_ts={fr_ts}, nx_ts={nx_ts}")
                 markX = mark * fx
 
                 _interval_ms = frint * 60 * 60 * 1000
-
-                print(f'frint: {frint}, _interval_ms: {_interval_ms}, fr: {fr}, nx_ts: {nx_ts}, fr_ts: {fr_ts}, l2_ts: {l2_ts}, mark: {mark}')
+                # print(f'frint: {frint}, _interval_ms: {_interval_ms}, fr: {fr}, nx_ts: {nx_ts}, fr_ts: {fr_ts}, l2_ts: {l2_ts}, mark: {mark}')
 
                 now_ms = int(time.time() *1000)
                 if nx_ts is None or fr_ts is None:
@@ -98,51 +95,55 @@ async def _calculate_cross_arbitrage(gateway, exchanges, asset):
         
         # This will only compared one asset contract (the input was one asset for this function call)        
         arbs_stats = {}
-        for i in range(len(contracts)):
-            for j in range(i+1, len(contracts)):
-                icontract = contracts[i]
-                jcontract = contracts[j]
+        try:
+            for i in range(len(contracts)):
+                for j in range(i+1, len(contracts)):
+                    icontract = contracts[i]
+                    jcontract = contracts[j]
 
-                if icontract['exchange'] == jcontract['exchange']:
-                    continue
-                
-                ij_ticker = (icontract['symbol'], icontract['exchange'], jcontract['symbol'], jcontract['exchange'])
-                ji_ticker = (jcontract['symbol'], jcontract['exchange'], icontract['symbol'], icontract['exchange'])
-                
-                if ij_ticker in skip or ji_ticker in skip:
-                    continue
-                
-                l2_delay = int(time.time()* 1000) - min(icontract['l2_ts'], jcontract['l2_ts'])
-                if l2_delay > 4000:
-                    skip.add(ij_ticker)
-                    skip.add(ji_ticker)
-                    continue
-                
-                ij_basis = jcontract['bidX'] - icontract['askX']
-                ij_basis_adj = ij_basis + (icontract['accrualX'] - jcontract['accrualX'])
-                
-                ji_basis = icontract['bidX'] - jcontract['askX']
-                ji_basis_adj = ji_basis + (jcontract['accrualX'] - icontract['accrualX'])
-                
-                avg_mark = 0.5 * (icontract['markX'] + jcontract['markX'])
-                fees = np.max(
-                    trade_fees[icontract['exchange']][0] + trade_fees[jcontract['exchange']][1],
-                    trade_fees[jcontract['exchange']][0] + trade_fees[icontract['exchange']][1]
-                )
-                inertia = fees * avg_mark
-                
-                # Instant profit percentage
-                ij_ev = (ij_basis_adj - inertia) / avg_mark
-                ji_ev = (ji_basis_adj - inertia) / avg_mark
-                
-                # Calculate the annualised funding rate differential
-                fr_diff_ij = icontract['fr_annual'] - jcontract['fr_annual']
-                fr_diff_ji = jcontract['fr_annual'] - icontract['fr_annual']
-                
-                if fr_diff_ij >= fr_diff_ji:
-                    arbs_stats[ij_ticker] = [fr_diff_ij, ij_ev]
-                else:
-                    arbs_stats[ji_ticker] = [fr_diff_ji, ji_ev]
+                    if icontract['exchange'] == jcontract['exchange']:
+                        continue
+                    
+                    ij_ticker = (icontract['symbol'], icontract['exchange'], jcontract['symbol'], jcontract['exchange'])
+                    ji_ticker = (jcontract['symbol'], jcontract['exchange'], icontract['symbol'], icontract['exchange'])
+                    
+                    if ij_ticker in skip or ji_ticker in skip:
+                        continue
+
+                    l2_delay = int(time.time()* 1000) - min(icontract['l2_ts'], jcontract['l2_ts'])
+                    if l2_delay > 4000:
+                        skip.add(ij_ticker)
+                        skip.add(ji_ticker)
+                        continue
+                    
+                    ij_basis = jcontract['bidX'] - icontract['askX']
+                    ij_basis_adj = ij_basis + (icontract['accrualX'] - jcontract['accrualX'])
+                    
+                    ji_basis = icontract['bidX'] - jcontract['askX']
+                    ji_basis_adj = ji_basis + (jcontract['accrualX'] - icontract['accrualX'])
+                    
+                    avg_mark = 0.5 * (icontract['markX'] + jcontract['markX'])
+                    fees = max(
+                        trade_fees[icontract['exchange']][0] + trade_fees[jcontract['exchange']][1],
+                        trade_fees[jcontract['exchange']][0] + trade_fees[icontract['exchange']][1]
+                    )
+                    inertia = fees * avg_mark
+                    
+                    # Instant profit percentage
+                    ij_ev = (ij_basis_adj - inertia) / avg_mark
+                    ji_ev = (ji_basis_adj - inertia) / avg_mark
+                    
+                    # Calculate the annualised funding rate differential
+                    fr_diff_ij = icontract['fr_annual'] - jcontract['fr_annual']
+                    fr_diff_ji = jcontract['fr_annual'] - icontract['fr_annual']
+                    
+                    if fr_diff_ij >= fr_diff_ji:
+                        arbs_stats[ij_ticker] = [fr_diff_ij, ij_ev]
+                    else:
+                        arbs_stats[ji_ticker] = [fr_diff_ji, ji_ev]
+        except Exception as e:
+            print(f"this is the error {e}")
+            
         if arbs_stats:
             global funding_opportunities
             funding_opportunities.update(arbs_stats)
@@ -153,7 +154,7 @@ async def _calculate_cross_arbitrage(gateway, exchanges, asset):
             continue
                    
 async def main():
-    global gateway, market_data
+    global gateway, market_data, last_tg_alert
     calibrate_for = 2
     leverage = 5
     
@@ -161,7 +162,6 @@ async def main():
     
     gateway = Gateway(config_keys=get_key())
     await gateway.init_clients()
-    
     
     market_data = MarketData(
         gateway=gateway,
@@ -172,7 +172,7 @@ async def main():
     assets = await market_data.search_overlap_asset(gateway=gateway, exchanges=exchanges)
     
     asyncio.create_task(market_data.serve_exchanges())
-    await asyncio.sleep(20000)
+    await asyncio.sleep(100)
     
     while True:
         now= datetime.now(pytz.utc)
@@ -210,10 +210,12 @@ async def main():
                 
                 if fr_diff > 15.0:  # High threshold for emergency alerts
                     await bot.emergency_alert(
-                        f"🚨 HIGH FUNDING ARBITRAGE: {fr_diff:.1f}% annualized spread detected!",
+                        f"🚨 HIGH FUNDING ARBITRAGE: {fr_diff:.1f}% annualized spread detected!\n"
+                        f" Long position on {exchange_i}, with contract {contract_i}\n"
+                        f" Short position on {exchange_j}, with contract {contract_j}\n",
                         action_required=f"Check funding rates on {exchange_i} vs {exchange_j}"
                     )
-                elif fr_diff > 8.0:  # Regular alerts for good opportunities  
+                elif fr_diff > 1.0:  # Regular alerts for good opportunities  
                     await bot.custom_message(
                         f"💡 Funding opportunity detected:\n"
                         f"📊 {fr_diff:.1f}% annualized spread\n"
