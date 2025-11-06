@@ -66,16 +66,17 @@ async def _calculate_cross_arbitrage(gateway, exchanges, asset):
                 markX = mark * fx
 
                 _interval_ms = frint * 60 * 60 * 1000
-                # print(f'frint: {frint}, _interval_ms: {_interval_ms}, fr: {fr}, nx_ts: {nx_ts}, fr_ts: {fr_ts}, l2_ts: {l2_ts}, mark: {mark}')
+                print(f'frint: {frint}, _interval_ms: {_interval_ms}, fr: {fr}, nx_ts: {nx_ts}, fr_ts: {fr_ts}, l2_ts: {l2_ts}, mark: {mark}')
 
                 now_ms = int(time.time() *1000)
                 if nx_ts is None or fr_ts is None:
-                    elapsed_ms = max(0, now_ms - (fr_ts or now_ms))
+                    elapsed_ms = max(0, now_ms - (fr_ts or nx_ts))
                     elapsed_ms = min(elapsed_ms, _interval_ms)
-                    accrual = mark *fr * (elapsed_ms/_interval_ms if _interval_ms else 0)
                 else:
-                    accrual = mark *fr * (_interval_ms - max(0, nx_ts - fr_ts))/ _interval_ms if _interval_ms else 0
-
+                    last_funding_time = nx_ts - _interval_ms
+                    elapsed_ms = max(0, min(_interval_ms, now_ms- last_funding_time))
+                    
+                accrual = mark * fr * (elapsed_ms/ _interval_ms if _interval_ms else 0)
                 accrualX = accrual * fx
                 fr_annual = fr * interval_per_year(frint) *100
                 
@@ -137,10 +138,14 @@ async def _calculate_cross_arbitrage(gateway, exchanges, asset):
                     fr_diff_ij = icontract['fr_annual'] - jcontract['fr_annual']
                     fr_diff_ji = jcontract['fr_annual'] - icontract['fr_annual']
                     
-                    if fr_diff_ij >= fr_diff_ji:
+                    total_ev_ij = ij_ev + fr_diff_ij /100
+                    total_ev_ji = ji_ev + fr_diff_ji /100
+                    
+                    if total_ev_ij > total_ev_ji:
                         arbs_stats[ij_ticker] = [fr_diff_ij, ij_ev]
                     else:
                         arbs_stats[ji_ticker] = [fr_diff_ji, ji_ev]
+                        
         except Exception as e:
             print(f"this is the error {e}")
             
