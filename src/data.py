@@ -55,7 +55,7 @@ class MarketData():
         binance_assets = {s[:-4] if s.endswith(('USDC', 'USDT')) else s for s in assets['binance']}
         hyperliquid_assets = set(assets['hyperliquid'].keys())
         overlapped = binance_assets & hyperliquid_assets
-        self.overlapped_assets = sorted(list(overlapped))[:10]
+        self.overlapped_assets = sorted(list(overlapped))[:200]
 
         return self.overlapped_assets
     

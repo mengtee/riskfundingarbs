@@ -62,7 +62,6 @@ async def _calculate_cross_arbitrage(gateway, exchanges, asset):
                 nx_ts = contract['next_funding']
                 mark = float(contract['mark_price'])
                 
-                # print(f"Values: fr={fr}, frint={frint}, mark={mark}, fr_ts={fr_ts}, nx_ts={nx_ts}")
                 markX = mark * fx
                 _interval_ms = frint * 60 * 60 * 1000
                 accrual = mark * fr * (_interval_ms - max(0,nx_ts-fr_ts)) / _interval_ms
@@ -82,8 +81,6 @@ async def _calculate_cross_arbitrage(gateway, exchanges, asset):
                     'quantity_precision': contract['quantity_precision'],
                     'min_notional': contract['min_notional']
                 })
-                print(f"fr: {fr}, accrual: {accrual}, accrualX: {accrualX}")
-
         
         # This will only compared one asset contract (the input was one asset for this function call)        
         ticker_stats = {}
@@ -190,28 +187,41 @@ async def main():
                     key=lambda x:x[1],
                     reverse=True
             ))
-            
-            current_time = time.time()
-            if current_time - last_tg_alert > 300 and sorted_opportunities:
-                best_opportunity = next(iter(sorted_opportunities.items()))
-                (contract_i, exchange_i, contract_j, exchange_j), (fr_diff, ev) = best_opportunity
                 
-                if fr_diff > 15.0:  # High threshold for emergency alerts
-                    await bot.emergency_alert(
+            if sorted_opportunities:
+                best_opportunity =next(iter(sorted_opportunities.items()))
+                (contract_i, exchange_i, contract_j, exchange_j), fr_diff = best_opportunity
+                
+                if fr_diff >25.0:
+                    await bot.custom_message(
                         f"🚨 HIGH FUNDING ARBITRAGE: {fr_diff:.1f}% annualized spread detected!\n"
                         f" Long position on {exchange_i}, with contract {contract_i}\n"
-                        f" Short position on {exchange_j}, with contract {contract_j}\n",
-                        action_required=f"Check funding rates on {exchange_i} vs {exchange_j}"
-                    )
-                elif fr_diff > 1.0:  # Regular alerts for good opportunities  
-                    await bot.custom_message(
-                        f"💡 Funding opportunity detected:\n"
-                        f"📊 {fr_diff:.1f}% annualized spread\n"
-                        f"Long: {exchange_i} | Short: {exchange_j}",
+                        f" Short position on {exchange_j}, with contract {contract_j}\n"
+                        f"Check funding rates on {exchange_i} vs {exchange_j}",
                         throttle_seconds=300
                     )
-                
+            
+            current_time = time.time()
+            if current_time - last_tg_alert > 14400 and sorted_opportunities:  # 14400 = 4 hours
+                message_lines = ["🔥 **4-Hour Funding Arbitrage Report** 🔥\n\n"]
+
+                for i, (pair, fr_diff) in enumerate(sorted_opportunities.items()):
+                    if i >= 10:  # Top 10 opportunities
+                        break
+
+                    contract_i, exchange_i, contract_j, exchange_j = pair
+                    message_lines.append(
+                        f"**{i+1}.** {fr_diff:.1f}% annualized\n"
+                        f"   📈 Long: {contract_i} on {exchange_i}\n"
+                        f"   📉 Short: {contract_j} on {exchange_j}\n\n"
+                    )
+
+                if len(sorted_opportunities) > 10:
+                    message_lines.append(f"... and {len(sorted_opportunities)-10} more opportunities")
+
+                await bot.custom_message("".join(message_lines))
                 last_tg_alert = current_time
+                funding_opportunities.clear()  # Clear for next 4-hour period
             
         except Exception as e:
             print(f'Calculations errors: {e}')
