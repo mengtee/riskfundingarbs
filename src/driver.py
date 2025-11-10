@@ -66,7 +66,6 @@ async def _calculate_cross_arbitrage(gateway, exchanges, asset):
                 markX = mark * fx
                 _interval_ms = frint * 60 * 60 * 1000
                 accrual = mark * fr * (_interval_ms - max(0,nx_ts-fr_ts)) / _interval_ms
-                print(f'this is the accrual: {accrual}')
                 accrualX = accrual * fx
                 fr_annual = fr * interval_per_year(frint) *100
                 
@@ -83,66 +82,61 @@ async def _calculate_cross_arbitrage(gateway, exchanges, asset):
                     'quantity_precision': contract['quantity_precision'],
                     'min_notional': contract['min_notional']
                 })
+                print(f"fr: {fr}, accrual: {accrual}, accrualX: {accrualX}")
+
         
         # This will only compared one asset contract (the input was one asset for this function call)        
-        arbs_stats = {}
-        try:
-            for i in range(len(contracts)):
-                for j in range(i+1, len(contracts)):
-                    icontract = contracts[i]
-                    jcontract = contracts[j]
+        ticker_stats = {}
+        for i in range(len(contracts)):
+            for j in range(i+1, len(contracts)):
+                icontract = contracts[i]
+                jcontract = contracts[j]
 
-                    if icontract['exchange'] == jcontract['exchange']:
-                        continue
-                    
-                    ij_ticker = (icontract['symbol'], icontract['exchange'], jcontract['symbol'], jcontract['exchange'])
-                    ji_ticker = (jcontract['symbol'], jcontract['exchange'], icontract['symbol'], icontract['exchange'])
-                    
-                    if ij_ticker in skip or ji_ticker in skip:
-                        continue
+                if icontract['exchange'] == jcontract['exchange']:
+                    continue
+                
+                ij_ticker = (icontract['symbol'], icontract['exchange'], jcontract['symbol'], jcontract['exchange'])
+                ji_ticker = (jcontract['symbol'], jcontract['exchange'], icontract['symbol'], icontract['exchange'])
+                
+                if ij_ticker in skip or ji_ticker in skip:
+                    continue
 
-                    l2_delay = int(time.time()* 1000) - min(icontract['l2_ts'], jcontract['l2_ts'])
-                    if l2_delay > 4000:
-                        skip.add(ij_ticker)
-                        skip.add(ji_ticker)
-                        continue
-                    
-                    ij_basis = jcontract['bidX'] - icontract['askX']
-                    ij_basis_adj = ij_basis + (icontract['accrualX'] - jcontract['accrualX'])
-                    
-                    ji_basis = icontract['bidX'] - jcontract['askX']
-                    ji_basis_adj = ji_basis + (jcontract['accrualX'] - icontract['accrualX'])
-                    
-                    avg_mark = 0.5 * (icontract['markX'] + jcontract['markX'])
-                    fees = max(
-                        trade_fees[icontract['exchange']][0] + trade_fees[jcontract['exchange']][1],
-                        trade_fees[jcontract['exchange']][0] + trade_fees[icontract['exchange']][1]
-                    )
-                    inertia = fees * avg_mark
-                    
-                    # Instant profit percentage
-                    ij_ev = (ij_basis_adj - inertia) / avg_mark
-                    ji_ev = (ji_basis_adj - inertia) / avg_mark
-                    
-                    # Calculate the annualised funding rate differential
-                    fr_diff_ij = icontract['fr_annual'] - jcontract['fr_annual']
-                    fr_diff_ji = jcontract['fr_annual'] - icontract['fr_annual']
-                    
-                    total_ev_ij = ij_ev + fr_diff_ij /100
-                    total_ev_ji = ji_ev + fr_diff_ji /100
-                    
-                    if total_ev_ij > total_ev_ji:
-                        arbs_stats[ij_ticker] = [fr_diff_ij, ij_ev]
-                    else:
-                        arbs_stats[ji_ticker] = [fr_diff_ji, ji_ev]
-                        
-        except Exception as e:
-            print(f"this is the error {e}")
+                l2_delay = int(time.time()* 1000) - min(icontract['l2_ts'], jcontract['l2_ts'])
+                if l2_delay > 4000:
+                    skip.add(ij_ticker)
+                    skip.add(ji_ticker)
+                    continue
+                
+                # initial formula: ij_basis_adj = (jcontract['bidX] - jcontract['accrualX]) - (icontract['askX'] - icontract['accrualX'])
+                ij_basis = jcontract['bidX'] - icontract['askX']
+                ij_basis_adj = ij_basis + (icontract['accrualX'] - jcontract['accrualX'])
+                ji_basis = icontract['bidX'] - jcontract['askX']
+                ji_basis_adj = ji_basis + (jcontract['accrualX'] - icontract['accrualX'])
+                
+                avg_mark = 0.5 * (icontract['markX'] + jcontract['markX'])
+                fees = max(
+                    trade_fees[icontract['exchange']][0] + trade_fees[jcontract['exchange']][1],
+                    trade_fees[jcontract['exchange']][0] + trade_fees[icontract['exchange']][1]
+                )
+                inertia = fees * avg_mark
+                ij_ev = (ij_basis_adj - inertia) / avg_mark
+                ji_ev = (ji_basis_adj - inertia) / avg_mark
+                fr_diff_ij = jcontract['fr_annual'] - icontract['fr_annual']
+                fr_diff_ji = icontract['fr_annual'] - jcontract['fr_annual']
+                
+                ticker_stats[ij_ticker] = [icontract, jcontract, avg_mark, fr_diff_ij]
+                ticker_stats[ji_ticker] = [jcontract, icontract, avg_mark, fr_diff_ji]
+                 
+        for pair, stats in ticker_stats.items():
+            if pair in skip:
+                continue
+            buy, sell = stats[0], stats[1]
+            assert buy['exchange'] == pair[1] and sell['exchange'] == pair[3]
             
-        if arbs_stats:
-            global funding_opportunities
-            funding_opportunities.update(arbs_stats)
-        
+            if stats[3] <= 0:
+                continue
+            funding_opportunities[pair] = stats[3]
+               
         iter += 1
         if iter % 15 == 0:
             await asyncio.sleep(1)
@@ -195,11 +189,10 @@ async def main():
                     funding_opportunities.items(),
                     key=lambda x:x[1][0],
                     reverse=True
-                ))
+            ))
             
             current_time = time.time()
             if current_time - last_tg_alert > 300 and sorted_opportunities:
-                # Find the best opportunity
                 best_opportunity = next(iter(sorted_opportunities.items()))
                 (contract_i, exchange_i, contract_j, exchange_j), (fr_diff, ev) = best_opportunity
                 
