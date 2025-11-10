@@ -187,7 +187,7 @@ async def main():
             if funding_opportunities:
                 sorted_opportunities = dict(sorted(
                     funding_opportunities.items(),
-                    key=lambda x:x[1][0],
+                    key=lambda x:x[1],
                     reverse=True
             ))
             
@@ -207,7 +207,6 @@ async def main():
                     await bot.custom_message(
                         f"💡 Funding opportunity detected:\n"
                         f"📊 {fr_diff:.1f}% annualized spread\n"
-                        f"💰 {ev*100:.2f}% instant EV\n"
                         f"Long: {exchange_i} | Short: {exchange_j}",
                         throttle_seconds=300
                     )
