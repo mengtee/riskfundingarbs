@@ -159,7 +159,7 @@ async def main():
     assets = await market_data.search_overlap_asset(gateway=gateway, exchanges=exchanges)
     
     asyncio.create_task(market_data.serve_exchanges())
-    await asyncio.sleep(100)
+    await market_data.wait_until_ready()
     
     while True:
         now= datetime.now(pytz.utc)

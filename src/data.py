@@ -35,7 +35,21 @@ class MarketData():
         self.base_mappings = {exc: {} for exc in exchanges}
         self.l2_ticker_streams = {exc:{} for exc in exchanges}
         self.balances = {exc:None for exc in exchanges}
-        
+        self.ready_flags = {exc: {'mappings': False, 'streams': False} for exc in exchanges}
+        self.ready_event = asyncio.Event()
+    
+    def is_ready(self):
+        for exc in self.exchanges:
+            flags = self.ready_flags[exc]
+            if not (flags['mappings'] and flags['streams']):
+                return False
+        return True
+    
+    async def wait_until_ready(self):
+        while not self.is_ready():
+            await asyncio.sleep(10)
+            logging.info('Waiting for data streams to be ready....')
+            
     def get_balance(self, exchange):
         return self.balances[exchange]
     
@@ -55,7 +69,7 @@ class MarketData():
         binance_assets = {s[:-4] if s.endswith(('USDC', 'USDT')) else s for s in assets['binance']}
         hyperliquid_assets = set(assets['hyperliquid'].keys())
         overlapped = binance_assets & hyperliquid_assets
-        self.overlapped_assets = sorted(list(overlapped))[:50]
+        self.overlapped_assets = sorted(list(overlapped))
 
         return self.overlapped_assets
     
@@ -100,6 +114,7 @@ class MarketData():
                 
                 self.base_mappings[exchange] = mappings
                 self.universe[exchange] = mappings
+                self.ready_flags[exchange]['mappings'] = True
                 await asyncio.sleep(60*4)
                 
             except Exception as e:
@@ -121,19 +136,36 @@ class MarketData():
         logging.info(f'[{exchange}] L2 Ticker Streams: {tickers}')
         logging.info(f'[{exchange} Total ticker count: {len(tickers)}]')
         if exchange == 'binance': tickers.append('USDCUSDT')
-        
-        # Use WebSocket streaming instead of REST API polling to avoid rate limits
         try:
-            lobs = await asyncio.gather(*[
-                gateway.executor.l2_book_mirror(
-                    ticker=ticker,
-                    speed_ms=500,
-                    exc=exchange,
-                    depth=20,
-                    as_dict=False,
-                    buffer_size=10
-                )for ticker in tickers
-            ], return_exceptions=True)
+            if len(tickers) >20:
+                logging.info(f'[{exchange}] Using sequential calls for {len(tickers)} tickers to prevent IP blocking')
+                lobs = []
+                for ticker in tickers:
+                    try:
+                        lob = await gateway.executor.l2_book_mirror(
+                            ticker=ticker,
+                            speed_ms=500,
+                            exc=exchange,
+                            depth=20,
+                            as_dict=False,
+                            buffer_size=10
+                        )
+                        lobs.append(lob)
+                        await asyncio.sleep(1)
+                    except Exception as e:
+                        lobs.append(e)
+            else:
+                logging.info(f'[{exchange}] Using parallel calls for {len(tickers)} tickers')
+                lobs = await asyncio.gather(*[
+                    gateway.executor.l2_book_mirror(
+                        ticker=ticker,
+                        speed_ms=500,
+                        exc=exchange,
+                        depth=20,
+                        as_dict=False,
+                        buffer_size=10
+                    )for ticker in tickers
+                ], return_exceptions=True)
             
             successful_pairs = []
             for ticker, lob in zip(tickers, lobs):
@@ -144,7 +176,7 @@ class MarketData():
             
             for ticker, lob in successful_pairs:
                 self.l2_ticker_streams[exchange][ticker] = lob
-            
+            self.ready_flags[exchange]['streams'] = True
             logging.info(f"Updated L2 Streams for {exchange} and tickers: {list(self.l2_ticker_streams[exchange].keys())}")
         except Exception as e:
             logging.error(f'Error in performing executor l2_book_mirror: {e}')
