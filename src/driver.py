@@ -25,6 +25,7 @@ exchanges =['binance', 'hyperliquid']
 funding_opportunities = {}
 fr_annualised = {}
 last_tg_alert = 0
+funding_interval_alert = 0
 
 round_hr = lambda dt: (dt + timedelta(minutes=30)).replace(second=0, microsecond=0, minute=0)
 interval_per_year = lambda hours: ((24/ hours) *365)
@@ -140,7 +141,7 @@ async def _calculate_cross_arbitrage(gateway, exchanges, asset):
             continue
                    
 async def main():
-    global gateway, market_data, last_tg_alert
+    global gateway, market_data, last_tg_alert, funding_interval_alert
     calibrate_for = 2
     leverage = 5
     
@@ -172,6 +173,8 @@ async def main():
         logging.info(f'Current time: {now}, Nearest hour: {nearest_hr}, Minutes to Nearest Hour: {min_dist}')
         
         try:
+            funding_opportunities.clear()  # Clear previous opportunities before each scan
+            
             await asyncio.gather(*[
                 calculate_cross_arbitrage(
                     timeout=30,
@@ -187,21 +190,22 @@ async def main():
                     key=lambda x:x[1],
                     reverse=True
             ))
-                
-            if sorted_opportunities:
-                best_opportunity =next(iter(sorted_opportunities.items()))
-                (contract_i, exchange_i, contract_j, exchange_j), fr_diff = best_opportunity
-                
-                if fr_diff >25.0:
-                    await bot.custom_message(
-                        f"🚨 HIGH FUNDING ARBITRAGE: {fr_diff:.1f}% annualized spread detected!\n"
-                        f" Long position on {exchange_i}, with contract {contract_i}\n"
-                        f" Short position on {exchange_j}, with contract {contract_j}\n"
-                        f"Check funding rates on {exchange_i} vs {exchange_j}",
-                        throttle_seconds=300
-                    )
-            
             current_time = time.time()
+            
+            if current_time - funding_interval_alert > 3600:
+                if sorted_opportunities:
+                    best_opportunity =next(iter(sorted_opportunities.items()))
+                    (contract_i, exchange_i, contract_j, exchange_j), fr_diff = best_opportunity
+                    
+                    if fr_diff >25.0:
+                        await bot.custom_message(
+                            f"🚨 HIGH FUNDING ARBITRAGE: {fr_diff:.1f}% annualized spread detected!\n"
+                            f" Long position on {exchange_i}, with contract {contract_i}\n"
+                            f" Short position on {exchange_j}, with contract {contract_j}\n"
+                            f"Check funding rates on {exchange_i} vs {exchange_j}",
+                            throttle_seconds=300
+                        )
+            
             if current_time - last_tg_alert > 14400 and sorted_opportunities:  # 14400 = 4 hours
                 message_lines = ["🔥 **4-Hour Funding Arbitrage Report** 🔥\n\n"]
 
